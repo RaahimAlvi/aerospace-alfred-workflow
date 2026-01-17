@@ -108,7 +108,14 @@ def resolve_app_path(bundle_id: str, cache: dict[str, Optional[str]]) -> Optiona
     return app_path
 
 
-def build_workspace_items(workspaces: list[str], query: str) -> list[dict]:
+def build_workspace_items(
+    workspaces: list[str],
+    query: str,
+    include_empty: bool,
+    mode: str,
+    window_id: Optional[str] = None,
+    enable_autocomplete: bool = False,
+) -> list[dict]:
     items = []
     query_lower = query.lower()
     for name in workspaces:
@@ -118,33 +125,82 @@ def build_workspace_items(workspaces: list[str], query: str) -> list[dict]:
             count = count_windows(name)
         except (subprocess.CalledProcessError, ValueError):
             count = 0
-        if count <= 0:
+        if count <= 0 and not include_empty:
             continue
 
-        window_label = "window" if count == 1 else "windows"
-        items.append(
-            {
-                "title": f"Workspace {name}",
-                "subtitle": f"{count} {window_label}",
-                "arg": name,
-                "uid": f"workspace-{name}",
-                "autocomplete": f"{name} ",
-                "variables": {
-                    "action": "focus-workspace",
-                    "workspace": name,
+        if count == 0:
+            subtitle = "empty"
+        else:
+            window_label = "window" if count == 1 else "windows"
+            subtitle = f"{count} {window_label}"
+
+        if mode == "browse":
+            action = "focus-workspace"
+        elif mode == "move-focused":
+            action = "move-focused-to-workspace"
+        elif mode == "move-window":
+            action = "move-window-to-workspace"
+        else:
+            action = "focus-workspace"
+
+        variables = {"action": action, "workspace": name}
+        if mode == "move-window" and window_id:
+            variables["window_id"] = window_id
+
+        item = {
+            "title": f"Workspace {name}",
+            "subtitle": subtitle,
+            "arg": name,
+            "uid": f"workspace-{name}",
+            "variables": variables,
+        }
+        if enable_autocomplete:
+            item["autocomplete"] = f"{name} "
+
+        if mode == "browse":
+            item["mods"] = {
+                "cmd": {
+                    "subtitle": f"Move focused window to workspace {name}",
+                    "arg": name,
+                    "variables": {
+                        "action": "move-focused-to-workspace",
+                        "workspace": name,
+                    },
                 },
-                "mods": {
-                    "cmd": {
-                        "subtitle": f"Move focused window to workspace {name}",
-                        "arg": name,
-                        "variables": {
-                            "action": "move-focused-to-workspace",
-                            "workspace": name,
-                        },
-                    }
+                "alt": {
+                    "subtitle": f"Move focused window to workspace {name} and follow",
+                    "arg": name,
+                    "variables": {
+                        "action": "move-focused-to-workspace-follow",
+                        "workspace": name,
+                    },
                 },
             }
-        )
+        elif mode == "move-focused":
+            item["mods"] = {
+                "alt": {
+                    "subtitle": f"Move focused window to workspace {name} and follow",
+                    "arg": name,
+                    "variables": {
+                        "action": "move-focused-to-workspace-follow",
+                        "workspace": name,
+                    },
+                }
+            }
+        elif mode == "move-window":
+            item["mods"] = {
+                "alt": {
+                    "subtitle": f"Move window to workspace {name} and follow",
+                    "arg": name,
+                    "variables": {
+                        "action": "move-window-to-workspace-follow",
+                        "workspace": name,
+                        "window_id": window_id or "",
+                    },
+                }
+            }
+
+        items.append(item)
     return items
 
 
@@ -176,6 +232,8 @@ def build_window_items(workspace: str, windows: list[dict], query: str) -> list[
             },
         }
         if window_id is not None:
+            item["autocomplete"] = f"move-window {window_id} "
+        if window_id is not None:
             item["uid"] = f"window-{window_id}"
         app_path = resolve_app_path(bundle_id, icon_cache)
         if app_path:
@@ -199,6 +257,32 @@ def main() -> int:
     if query:
         first_token = query.split()[0]
         remainder = query[len(first_token) :].strip()
+        if first_token == "move":
+            items = build_workspace_items(
+                workspaces,
+                remainder,
+                include_empty=True,
+                mode="move-focused",
+                enable_autocomplete=False,
+            )
+            print(json.dumps({"items": items}))
+            return 0
+        if first_token == "move-window":
+            tokens = query.split()
+            if len(tokens) >= 2:
+                window_id = tokens[1]
+                remainder_start = len(tokens[0]) + len(tokens[1]) + 1
+                remainder = query[remainder_start:].strip()
+                items = build_workspace_items(
+                    workspaces,
+                    remainder,
+                    include_empty=True,
+                    mode="move-window",
+                    window_id=window_id,
+                    enable_autocomplete=False,
+                )
+                print(json.dumps({"items": items}))
+                return 0
         if first_token in workspaces:
             try:
                 windows = fetch_windows(first_token)
@@ -213,7 +297,13 @@ def main() -> int:
             print(json.dumps({"items": items}))
             return 0
 
-    items = build_workspace_items(workspaces, query)
+    items = build_workspace_items(
+        workspaces,
+        query,
+        include_empty=False,
+        mode="browse",
+        enable_autocomplete=True,
+    )
     print(json.dumps({"items": items}))
     return 0
 

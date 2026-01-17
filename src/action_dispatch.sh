@@ -24,6 +24,35 @@ case "$action" in
     fi
     aerospace move-node-to-workspace "$arg"
     ;;
+  move-focused-to-workspace-follow)
+    if [[ -z "$arg" ]]; then
+      echo "Missing workspace name" >&2
+      exit 1
+    fi
+    aerospace move-node-to-workspace --focus-follows-window "$arg"
+    ;;
+  move-window-to-workspace)
+    if [[ -z "$arg" ]]; then
+      echo "Missing workspace name" >&2
+      exit 1
+    fi
+    if [[ -z "${window_id:-}" ]]; then
+      echo "Missing window id" >&2
+      exit 1
+    fi
+    aerospace move-node-to-workspace --window-id "$window_id" "$arg"
+    ;;
+  move-window-to-workspace-follow)
+    if [[ -z "$arg" ]]; then
+      echo "Missing workspace name" >&2
+      exit 1
+    fi
+    if [[ -z "${window_id:-}" ]]; then
+      echo "Missing window id" >&2
+      exit 1
+    fi
+    aerospace move-node-to-workspace --focus-follows-window --window-id "$window_id" "$arg"
+    ;;
   focus-window)
     if [[ -z "$arg" ]]; then
       echo "Missing window id" >&2
