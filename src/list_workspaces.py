@@ -242,6 +242,73 @@ def build_window_items(workspace: str, windows: list[dict], query: str) -> list[
     return items
 
 
+def build_workspace_action_items(workspace: str) -> list[dict]:
+    return [
+        {
+            "title": f"Focus workspace {workspace}",
+            "subtitle": "Switch to this workspace",
+            "arg": workspace,
+            "variables": {
+                "action": "focus-workspace",
+                "workspace": workspace,
+            },
+        },
+        {
+            "title": f"Move focused window to {workspace}",
+            "subtitle": "Move focused window only",
+            "arg": workspace,
+            "variables": {
+                "action": "move-focused-to-workspace",
+                "workspace": workspace,
+            },
+        },
+        {
+            "title": f"Move focused window to {workspace} and follow",
+            "subtitle": "Move window and switch to destination",
+            "arg": workspace,
+            "variables": {
+                "action": "move-focused-to-workspace-follow",
+                "workspace": workspace,
+            },
+        },
+        {
+            "title": f"List windows in workspace {workspace}",
+            "subtitle": "Drill into workspace windows",
+            "autocomplete": f"{workspace} ",
+            "valid": False,
+        },
+    ]
+
+
+def build_arrange_items() -> list[dict]:
+    items = []
+    for direction in ("left", "right", "up", "down"):
+        items.append(
+            {
+                "title": f"Move focused window {direction}",
+                "subtitle": "Reorder window within layout",
+                "arg": direction,
+                "variables": {
+                    "action": "move-focused-direction",
+                    "direction": direction,
+                },
+            }
+        )
+    for direction in ("left", "right", "up", "down"):
+        items.append(
+            {
+                "title": f"Swap focused window {direction}",
+                "subtitle": "Swap with adjacent window",
+                "arg": direction,
+                "variables": {
+                    "action": "swap-focused-direction",
+                    "direction": direction,
+                },
+            }
+        )
+    return items
+
+
 def main() -> int:
     query = " ".join(sys.argv[1:]).strip()
     try:
@@ -283,6 +350,31 @@ def main() -> int:
                 )
                 print(json.dumps({"items": items}))
                 return 0
+        if first_token in {"action", "actions"}:
+            tokens = query.split()
+            if len(tokens) >= 2:
+                workspace = tokens[1]
+                if workspace in workspaces:
+                    items = build_workspace_action_items(workspace)
+                    print(json.dumps({"items": items}))
+                    return 0
+            items = build_workspace_items(
+                workspaces,
+                remainder,
+                include_empty=True,
+                mode="browse",
+                enable_autocomplete=False,
+            )
+            for item in items:
+                item["subtitle"] = "Actions for this workspace"
+                item["autocomplete"] = f"action {item['arg']} "
+                item["valid"] = False
+            print(json.dumps({"items": items}))
+            return 0
+        if first_token == "arrange":
+            items = build_arrange_items()
+            print(json.dumps({"items": items}))
+            return 0
         if first_token in workspaces:
             try:
                 windows = fetch_windows(first_token)

@@ -53,6 +53,20 @@ case "$action" in
     fi
     aerospace move-node-to-workspace --focus-follows-window --window-id "$window_id" "$arg"
     ;;
+  move-focused-direction)
+    if [[ -z "${direction:-}" ]]; then
+      echo "Missing direction" >&2
+      exit 1
+    fi
+    aerospace move "$direction"
+    ;;
+  swap-focused-direction)
+    if [[ -z "${direction:-}" ]]; then
+      echo "Missing direction" >&2
+      exit 1
+    fi
+    aerospace swap "$direction"
+    ;;
   focus-window)
     if [[ -z "$arg" ]]; then
       echo "Missing window id" >&2
