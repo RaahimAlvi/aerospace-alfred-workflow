@@ -101,6 +101,14 @@ def fetch_all_windows() -> list[dict]:
     return windows
 
 
+def fetch_bindings() -> dict:
+    raw_bindings = run_command(
+        ["aerospace", "config", "--get", "mode.main.binding", "--json"]
+    )
+    bindings = json.loads(raw_bindings)
+    return bindings
+
+
 def resolve_app_path(
     bundle_id: str, cache: dict[str, dict]
 ) -> Tuple[Optional[str], bool]:
@@ -345,6 +353,26 @@ def build_arrange_items() -> list[dict]:
     return items
 
 
+def build_hotkey_items(bindings: dict, query: str) -> list[dict]:
+    items = []
+    query_lower = query.lower()
+    for hotkey, action in bindings.items():
+        title = str(action)
+        subtitle = str(hotkey)
+        haystack = f"{title} {subtitle}".lower()
+        if query_lower and query_lower not in haystack:
+            continue
+        items.append(
+            {
+                "title": title,
+                "subtitle": subtitle,
+                "arg": subtitle,
+                "text": {"copy": subtitle, "largetype": subtitle},
+            }
+        )
+    return items
+
+
 def main() -> int:
     query = " ".join(sys.argv[1:]).strip()
     icon_cache = load_icon_cache()
@@ -370,6 +398,19 @@ def main() -> int:
     if query:
         first_token = query.split()[0]
         remainder = query[len(first_token) :].strip()
+        if first_token in {"command", "commands", "hotkey", "hotkeys", "keys", "help"}:
+            try:
+                bindings = fetch_bindings()
+            except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+                payload = alfred_error_item(
+                    "Failed to load AeroSpace keybindings",
+                    f"{exc}",
+                )
+                print(json.dumps(payload))
+                return 1
+            items = build_hotkey_items(bindings, remainder)
+            print(json.dumps({"items": items}))
+            return 0
         if first_token == "move":
             items = build_workspace_items(
                 workspaces,
