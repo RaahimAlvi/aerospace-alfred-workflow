@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 import sys
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 
 def run_command(args: list[str]) -> str:
@@ -39,48 +41,78 @@ def fetch_workspaces() -> list[str]:
     return names
 
 
-def count_windows(workspace: str) -> int:
-    raw_count = run_command(
-        ["aerospace", "list-windows", "--workspace", workspace, "--count"]
-    )
-    return int(raw_count.strip() or "0")
+CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
-def fetch_windows(workspace: str) -> list[dict]:
+def get_cache_path() -> str:
+    cache_root = os.environ.get("XDG_CACHE_HOME")
+    if not cache_root:
+        cache_root = os.path.expanduser("~/Library/Caches")
+    cache_dir = os.path.join(cache_root, "aerospace-alfred-workflow")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "icon_cache.json")
+
+
+def load_icon_cache() -> dict:
+    cache_path = get_cache_path()
+    try:
+        with open(cache_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_icon_cache(cache: dict) -> None:
+    cache_path = get_cache_path()
+    try:
+        with open(cache_path, "w", encoding="utf-8") as handle:
+            json.dump(cache, handle)
+    except OSError:
+        return
+
+
+def fetch_all_windows() -> list[dict]:
     raw_windows = run_command(
         [
             "aerospace",
             "list-windows",
-            "--workspace",
-            workspace,
+            "--all",
             "--format",
-            "%{window-id}\t%{app-bundle-id}\t%{app-name}\t%{window-title}",
+            "%{window-id}\t%{app-bundle-id}\t%{app-name}\t%{window-title}\t%{workspace}",
         ]
     )
     windows = []
     for line in raw_windows.splitlines():
         if not line.strip():
             continue
-        parts = line.split("\t", 3)
-        while len(parts) < 4:
+        parts = line.split("\t", 4)
+        while len(parts) < 5:
             parts.append("")
-        window_id, bundle_id, app_name, window_title = parts
+        window_id, bundle_id, app_name, window_title, workspace = parts
         windows.append(
             {
                 "window-id": int(window_id) if window_id else None,
                 "app-bundle-id": bundle_id,
                 "app-name": app_name,
                 "window-title": window_title,
+                "workspace": workspace,
             }
         )
     return windows
 
 
-def resolve_app_path(bundle_id: str, cache: dict[str, Optional[str]]) -> Optional[str]:
+def resolve_app_path(
+    bundle_id: str, cache: dict[str, dict]
+) -> Tuple[Optional[str], bool]:
     if not bundle_id:
-        return None
+        return None, False
     if bundle_id in cache:
-        return cache[bundle_id]
+        entry = cache[bundle_id]
+        if isinstance(entry, dict):
+            ts = entry.get("ts", 0)
+            path = entry.get("path", "")
+            if ts and (time.time() - ts) < CACHE_TTL_SECONDS:
+                return (path or None), False
     app_path = None
     try:
         raw_paths = run_command(
@@ -104,8 +136,10 @@ def resolve_app_path(bundle_id: str, cache: dict[str, Optional[str]]) -> Optiona
             app_path = raw_path.strip() if raw_path.strip() else None
         except subprocess.CalledProcessError:
             app_path = None
-    cache[bundle_id] = app_path
-    return app_path
+    if app_path and not os.path.exists(app_path):
+        app_path = None
+    cache[bundle_id] = {"path": app_path or "", "ts": int(time.time())}
+    return app_path, True
 
 
 def build_workspace_items(
@@ -113,6 +147,7 @@ def build_workspace_items(
     query: str,
     include_empty: bool,
     mode: str,
+    counts_by_workspace: dict[str, int],
     window_id: Optional[str] = None,
     enable_autocomplete: bool = False,
 ) -> list[dict]:
@@ -121,10 +156,7 @@ def build_workspace_items(
     for name in workspaces:
         if query_lower and query_lower not in name.lower():
             continue
-        try:
-            count = count_windows(name)
-        except (subprocess.CalledProcessError, ValueError):
-            count = 0
+        count = counts_by_workspace.get(name, 0)
         if count <= 0 and not include_empty:
             continue
 
@@ -204,9 +236,11 @@ def build_workspace_items(
     return items
 
 
-def build_window_items(workspace: str, windows: list[dict], query: str) -> list[dict]:
+def build_window_items(
+    workspace: str, windows: list[dict], query: str, icon_cache: dict
+) -> Tuple[list[dict], bool]:
     items = []
-    icon_cache: dict[str, Optional[str]] = {}
+    cache_updated = False
     query_lower = query.lower()
     for window in windows:
         app_name = window.get("app-name") or "Unknown App"
@@ -235,11 +269,13 @@ def build_window_items(workspace: str, windows: list[dict], query: str) -> list[
             item["autocomplete"] = f"move-window {window_id} "
         if window_id is not None:
             item["uid"] = f"window-{window_id}"
-        app_path = resolve_app_path(bundle_id, icon_cache)
+        app_path, updated = resolve_app_path(bundle_id, icon_cache)
+        if updated:
+            cache_updated = True
         if app_path:
             item["icon"] = {"type": "fileicon", "path": app_path}
         items.append(item)
-    return items
+    return items, cache_updated
 
 
 def build_workspace_action_items(workspace: str) -> list[dict]:
@@ -311,8 +347,10 @@ def build_arrange_items() -> list[dict]:
 
 def main() -> int:
     query = " ".join(sys.argv[1:]).strip()
+    icon_cache = load_icon_cache()
     try:
         workspaces = fetch_workspaces()
+        windows = fetch_all_windows()
     except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         payload = alfred_error_item(
             "AeroSpace workspace query failed",
@@ -320,6 +358,14 @@ def main() -> int:
         )
         print(json.dumps(payload))
         return 1
+
+    counts_by_workspace: dict[str, int] = {name: 0 for name in workspaces}
+    windows_by_workspace: dict[str, list[dict]] = {}
+    for window in windows:
+        workspace = window.get("workspace") or ""
+        if workspace:
+            counts_by_workspace[workspace] = counts_by_workspace.get(workspace, 0) + 1
+            windows_by_workspace.setdefault(workspace, []).append(window)
 
     if query:
         first_token = query.split()[0]
@@ -330,6 +376,7 @@ def main() -> int:
                 remainder,
                 include_empty=True,
                 mode="move-focused",
+                counts_by_workspace=counts_by_workspace,
                 enable_autocomplete=False,
             )
             print(json.dumps({"items": items}))
@@ -345,6 +392,7 @@ def main() -> int:
                     remainder,
                     include_empty=True,
                     mode="move-window",
+                    counts_by_workspace=counts_by_workspace,
                     window_id=window_id,
                     enable_autocomplete=False,
                 )
@@ -363,6 +411,7 @@ def main() -> int:
                 remainder,
                 include_empty=True,
                 mode="browse",
+                counts_by_workspace=counts_by_workspace,
                 enable_autocomplete=False,
             )
             for item in items:
@@ -376,16 +425,12 @@ def main() -> int:
             print(json.dumps({"items": items}))
             return 0
         if first_token in workspaces:
-            try:
-                windows = fetch_windows(first_token)
-            except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-                payload = alfred_error_item(
-                    f"Failed to list windows for workspace {first_token}",
-                    f"{exc}",
-                )
-                print(json.dumps(payload))
-                return 1
-            items = build_window_items(first_token, windows, remainder)
+            workspace_windows = windows_by_workspace.get(first_token, [])
+            items, cache_updated = build_window_items(
+                first_token, workspace_windows, remainder, icon_cache
+            )
+            if cache_updated:
+                save_icon_cache(icon_cache)
             print(json.dumps({"items": items}))
             return 0
 
@@ -394,6 +439,7 @@ def main() -> int:
         query,
         include_empty=False,
         mode="browse",
+        counts_by_workspace=counts_by_workspace,
         enable_autocomplete=True,
     )
     print(json.dumps({"items": items}))
