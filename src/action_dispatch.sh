@@ -17,6 +17,13 @@ case "$action" in
     fi
     aerospace workspace "$arg"
     ;;
+  move-focused-to-workspace)
+    if [[ -z "$arg" ]]; then
+      echo "Missing workspace name" >&2
+      exit 1
+    fi
+    aerospace move-node-to-workspace "$arg"
+    ;;
   focus-window)
     if [[ -z "$arg" ]]; then
       echo "Missing window id" >&2

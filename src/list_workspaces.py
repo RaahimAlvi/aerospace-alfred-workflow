@@ -133,6 +133,16 @@ def build_workspace_items(workspaces: list[str], query: str) -> list[dict]:
                     "action": "focus-workspace",
                     "workspace": name,
                 },
+                "mods": {
+                    "cmd": {
+                        "subtitle": f"Move focused window to workspace {name}",
+                        "arg": name,
+                        "variables": {
+                            "action": "move-focused-to-workspace",
+                            "workspace": name,
+                        },
+                    }
+                },
             }
         )
     return items
